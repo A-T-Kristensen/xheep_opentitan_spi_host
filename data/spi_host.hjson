@@ -282,8 +282,10 @@
             name: "CSNTRAIL"
             desc: '''CS_N Trailing Time.  Indicates the number of half sck cycles,
                      CSNTRAIL+1, to leave between last edge of sck and the rising
-                     edge of cs_n. Setting this register to zero corresponds
-                     to the minimum delay of one-half sck cycle.'''
+                     edge of cs_n when CPHA is 0.  When CPHA is 1, the delay is
+                     one half sck cycle longer.  Setting this register to zero
+                     corresponds to the minimum delay of one-half sck cycle, or
+                     one sck cycle when CPHA is 1.'''
             resval: 0
           },
           { bits: "19:16",

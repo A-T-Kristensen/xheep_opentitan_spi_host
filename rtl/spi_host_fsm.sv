@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Core Implemenation module for Serial Peripheral Interface (SPI) Host IP.
+// Core Implementation module for Serial Peripheral Interface (SPI) Host IP.
 //
 
 `include "common_cells/assertions.svh"
@@ -51,13 +51,13 @@ module spi_host_fsm
   logic             full_cyc, cpha, cpol;
   logic             full_cyc_q, cpha_q, cpol_q;
 
-  // Unlike the configopts fields, the segment fields can change in back-to-backsegment operation.
+  // Unlike the configopts fields, the segment fields can change in back-to-back segment operation.
   // (If a change in only the configopts fields is detected, the FSM transitions to idle instead).
   // For that reason, when using the segment fields in back-to-back operations,  we have to bear
   // in mind context and determine whether it is appropriate to use the value for the previous
   // segment or the following segment.
-  // For instance, the cmd_rd_en signal is sometimes used to push segment byte into the shift
-  // register, and so in that case it is important to use cmd_rd_en_q in that sense.  The same
+  // For instance, the cmd_rd_en signal is sometimes used to pull a received byte out of the
+  // shift register, and so in that case it is important to use cmd_rd_en_q in that sense.  The same
   // signal is consulted to load the bit counter at the /beginning/ of each byte or dummy cycle,
   // and so in this context it is appropriate to use cmd_rd_en_d (which refers to the value from
   // the immediately following segment).
@@ -263,6 +263,8 @@ module spi_host_fsm
           // Half-cycle sampling clock for CPHA=1.
           // End-of-transaction clock level for both CPHA=0 and CPHA=1.
           // One of two active clock states. sck is low when CPOL=0.
+          // For CPHA=1 this is the last clock state of a segment, so the next state depends on
+          // CSAAT, and if CSAAT is asserted, on the details of the subsequent command.
           if (!last_bit || !last_byte || !cpha_q) begin
             state_d = InternalClkHigh;
           end else if (!csaat_q) begin
@@ -274,10 +276,12 @@ module spi_host_fsm
         end
         InternalClkHigh: begin
           // Half-cycle sampling clock for CPHA=0.
-          // Launch clock for CPHA=1. Note: Full-cycle sampling is not compatible with CPHA=1.
-          // One of two active clock states. sck is low when CPOL=0.
-          // Typically often the last state in a command, and so the next state depends on CSAAT,
-          // and of CSAAT is asserted, the details of the subsequent command.
+          // Launch clock and full-cycle sampling clock for CPHA=1. With FULLCYC=1 the shift
+          // register takes sd_i at the shift strobe on entry to this state, and the last bit
+          // of a byte at the read strobe on exit from InternalClkLow.
+          // One of two active clock states. sck is high when CPOL=0.
+          // For CPHA=0 this is the last clock state of a segment, so the next state depends on
+          // CSAAT, and if CSAAT is asserted, on the details of the subsequent command.
           if (!last_bit || !last_byte || cpha_q) begin
             state_d = InternalClkLow;
           // Check value of csaat for the previously submitted segment
@@ -303,9 +307,9 @@ module spi_host_fsm
           end
         end
         CSBSwitch: begin
-          // Insert extra idle cycles when swtiching between CSID, this allows time to switch CPHA,
-          // CPOL and clkdiv settings, as well as guarantee that the idle delay requirements have
-          // been observed for the new device.
+          // Insert extra idle cycles when the next command has another configuration. This
+          // allows time to switch CPHA, CPOL and clkdiv settings, and guarantees that the idle
+          // delay requirements of the new configuration are observed.
           if (wait_cntr_q == 4'h0) begin
             state_d = WaitLead;
           end else begin
@@ -353,11 +357,9 @@ module spi_host_fsm
 
   assign segment_rd_en_cpha0 = cmd_rd_en_q;
 
-  // We can calculate byte transitions for CPHA=1 by noting
-  // that in this implmentation, the sck edges have a 1-1
-  // correspondence with FSM transitions.
-  // New bytes are loaded exactly one state transition behind the time
-  // when they would be loaded if CPHA=0
+  // For CPHA=1 the segment read enable is the CPHA=0 read enable delayed by
+  // one state transition. The CPHA=1 byte strobes below are derived from the
+  // FSM transitions directly.
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       segment_rd_en_cpha1   <= 1'b0;
@@ -366,9 +368,9 @@ module spi_host_fsm
     end
   end
 
-  // For CPHA=1, the launch and capture states flip roles, and data output
-  // does not begin in the WaitIdle state, when CSB first asserts. They
-  // otherwise look very similar to the CPHA=0 case.
+  // For CPHA=1, the launch and capture states flip roles. The first TX byte
+  // loads on entry to InternalClkHigh, at the first sck edge, not on entry to
+  // WaitLead. A byte ends on exit from InternalClkLow.
   assign byte_starting_cpha1 = ~sw_rst_i & state_changing &
                                 (state_d == InternalClkHigh & bit_cntr_q==0);
   assign bit_shifting_cpha1  = ~sw_rst_i & state_changing &
@@ -405,7 +407,7 @@ module spi_host_fsm
       // a fixed number of pulses, NOT bytes.
       // thus "last_bit" is always asserted,
       // and the number of pulses is counted
-      // by byte_cntr_d.
+      // by the byte counter of the CPHA setting.
       shift_size = 0;
       start_bit = 3'h0;
     end else begin
@@ -440,9 +442,10 @@ module spi_host_fsm
   assign last_bit  = (bit_cntr_q == 3'h0);
   //
   // The variable last_byte is only used for updating the FSM state.
-  // For CPHA=1 operation, either byte_cntr_cpha0_q or byte_cntr_cpha1_q
-  // can drive the FSM properly.  However, we explicitly choose
-  // byte_cntr_cpha0_q to avoid a combinational logic loop.
+  // It reads the byte counter of the registered CPHA setting:
+  // byte_cntr_cpha1_q for CPHA=1, and byte_cntr_cpha0_q for CPHA=0.
+  // Both counters are registered, so neither choice forms a
+  // combinational loop with the FSM.
   //
   always_comb begin
     if (cpha_q) begin
@@ -452,8 +455,8 @@ module spi_host_fsm
     end
   end
 
-  // Note: when updating the byte_cntr in CPHA=0 mode with a new command value, the length must
-  // be pulled in directly from the command bus, cmd_len_d;
+  // Note: when updating either byte_cntr with a new command value, the length must be pulled
+  // in directly from the command bus, cmd_len_d.
   assign byte_cntr_cpha0_d = sw_rst_i    ? 24'h0 :
                              !fsm_en     ? byte_cntr_cpha0_q :
                              new_command ? cmd_len_d :

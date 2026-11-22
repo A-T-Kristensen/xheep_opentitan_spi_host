@@ -107,6 +107,7 @@ This full cycle mode has no effect on any of the signals transmitted, only on th
     text: "Standard SPI transaction (1 byte), illustrating of the impact of the CPOL, CPHA, and FULLCYC settings"
   },
   foot: {
+    text: "The CSB row shows CPHA = 0. For CPHA = 1, CSB rises one half SCK cycle later, after the last full-cycle sampling event."
   }
 }
 {{< /wavejson >}}
@@ -301,7 +302,7 @@ $$T_{\textrm{SCK},0}=\frac{1}{2}\frac{T_\textrm{clk}}{\textrm{CONFIGOPTS.CLKDIV}
 Typically the CSB line is automatically deasserted after the last edge of SCK.
 However, by asserting {{< regref "COMMAND.CSAAT" >}} when issuing a particular command, one can instruct the core to hold CSB low indefinitely after the last clock edge.
 This is useful for merging two adjacent command segments together, to create more complex commands, such as flash Quad read commands which require a mix of segments with different speeds and directions.
-The CSB line can then be deasserted by either issuing another command without the {{< regref "COMMAND.CSAAT" >}} field, issuing a command to a different device (after changing the {{< regref "CSID" >}} register), or simply resetting the core FSM via the {{< regref "CONTROL.RST" >}} register.
+The CSB line can then be deasserted by either issuing another command without the {{< regref "COMMAND.CSAAT" >}} field, issuing a command to a different device (after changing the {{< regref "CSID" >}} register), issuing a command with different {{< regref "CONFIGOPTS" >}} (the second case below), or simply resetting the core FSM via the {{< regref "CONTROL.RST" >}} register.
 
 To avoid spurious clock signals, changes to the {{< regref "CONFIGOPTS" >}} parameters take effect only at the end of a command segment and only when all `csb` lines are deasserted.
 There are two cases to consider:
@@ -321,7 +322,8 @@ This time delay is a half SCK cycle by default but can be extended to as long as
 - T<sub>LEAD</sub>: The minimum time between each falling edge of CSB and the first leading edge of SCK.
 This time delay is a half SCK cycle by default but can be extended to as long as eight SCK cycles by setting the {{< regref "CONFIGOPTS.CSNLEAD">}} register.
 - T<sub>TRAIL</sub>: The minimum time between the last trailing edge of SCK and the following rising edge of CSB.
-This time delay is a half SCK cycle by default but can be extended to as long as eight SCK cycles by setting the {{< regref "CONFIGOPTS.CSNTRAIL">}} register.
+This time delay is a half SCK cycle by default for CPHA = 0, and a full SCK cycle for CPHA = 1, because a CPHA = 1 segment ends one timeslice after its last SCK edge.
+The {{< regref "CONFIGOPTS.CSNTRAIL">}} register extends it by up to seven and a half SCK cycles.
 
 {{< wavejson >}}
 {signal: [
@@ -878,8 +880,8 @@ This section describes the SPI_HOST FSM and its control of the `sck` and `csb` l
 The SPI_HOST FSM is driven by the rising edge of the input clock, however the FSM state registers are not *enabled* during every cycle.
 There is an internal clock counter `clk_cntr_q` which repeatedly counts down from {{< regref "CONFIGOPTS.CLKDIV" >}} to 0, and the FSM is only enabled when `clk_cntr_q == 0`.
 
-The exception is when the FSM is one of the two possible Idle states (`Idle` or `IdleCSBActive`), in which case `clk_cntr_q` is constantly held at zero, making it possible to immediately transition out of the idle state as soon as a new command appears.
-Once the FSM transitions out of the idle state, `clk_cntr_q` resets to {{< regref "CONFIGOPTS.CLKDIV" >}}, and FSM transitions are only enabled at the divided clock rate.
+The exception is when the FSM is in one of the two possible Idle states (`Idle` or `IdleCSBActive`), in which case the FSM is enabled in every cycle and `clk_cntr_q` holds its value, making it possible to immediately transition out of the idle state as soon as a new command appears.
+When a new command is accepted, `clk_cntr_q` loads {{< regref "CONFIGOPTS.CLKDIV" >}} of that command, so the first timeslice after the idle state lasts the full `clkdiv+1` cycles, and FSM transitions are then only enabled at the divided clock rate.
 
 As shown in the waveform below, this has the effect of limiting the FSM transitions to only occur at discrete *timeslices* of duration:
 
@@ -889,9 +891,9 @@ $$T_\textrm{timeslice} = \frac{T_{\textrm{clk},\textrm{clk}}}{\texttt{clkdiv}+1}
 {signal: [
   {name: 'clk',        wave: 'p......................'},
   {name: 'clkdiv',     wave: '2......................', data: "3"},
-  {name: 'clk_cntr_q', wave: '222222222222......22222', data: "3 2 1 0 3 2 1 0 3 2 1 0 3 2 1 0 3"},
+  {name: 'clk_cntr_q', wave: '2222222222222.....22222', data: "3 2 1 0 3 2 1 0 3 2 1 0 3 3 2 1 0 3"},
   {name: 'FSM state',  wave: '2...2.......2.....2...2', data: "WaitTrail WaitIdle Idle WaitLead Hi"              },
-  {name: 'fsm_en',     wave: '0..10......1......0..10'              },
+  {name: 'fsm_en',     wave: '0..10..10..1......0..10'              },
   {name: 'Timeslice Boundary', wave: "1...H...H...H.....H...H"}
 ],
   edge: ["A<->B min. 9 cycles", "C<->D min. 4 cycles"],
@@ -920,7 +922,10 @@ In this case the state machine can be simplified to the following figure.
 
 ![](spi_host_fsm_simplified.svg)
 
-The operation of the state machine is the same regardless of the polarity (CPOL) or phase (CPHA) of the current command.
+The figure shows the transitions for CPHA=0.
+The operation of the state machine is the same regardless of the polarity (CPOL) of the current command.
+The phase (CPHA) changes which clock state ends a segment: `InternalClkHigh` for `CPHA==0`, and `InternalClkLow` for `CPHA==1`, as the descriptions of those two states below say.
+In a segment that enters `WaitLead` from `Idle`, `WaitIdle` or `ConfigSwitch`, it also moves each milestone signal by one state transition, as described in the section on milestone signals.
 Commands with `CPOL==0` or `CPOL==1` are processed nearly identically, since the only difference is in the polarity of the `sck` output.
 The state machine drives an internal `sck` clock signal, which is low except when the FSM is in the `InternalClockHigh` state.
 If `CPOL==0` this clock is registered as is to the external `sck` ports.
@@ -938,11 +943,13 @@ For his reason, the FSM uses the `wait_cntr` to track the number of timeslices s
 
 3. InternalClkHigh state: Entering this state drives `sck` high.
 This state repeats many times per segment, and usually transitions to the `InternalClkLow` state.
-The FSM transitions to the `WaitTrail` state only when the entire segment has been transmitted/received (as indicated by the signals last_bit and last_byte).
-This state machine usually only lasts stays in this state for one timeslice, except when the FSM is disabled or stalled.
+For `CPHA==0`, the FSM transitions to the `WaitTrail` state from this state only when the entire segment has been transmitted/received (as indicated by the signals last_bit and last_byte).
+For `CPHA==1`, this state always transitions to the `InternalClkLow` state.
+The state machine usually stays in this state for only one timeslice, except when the FSM is disabled or stalled.
 
 4. InternalClkLow state: This state serves to drive `sck` low between visits to the `InternalClkHigh` state.
-This state always returns back to the `InternalClkHigh` state in the next timeslice.
+For `CPHA==0`, this state always returns back to the `InternalClkHigh` state in the next timeslice.
+For `CPHA==1`, this state is the last clock state of a segment: when the entire segment has been transmitted/received, the FSM transitions from this state to the `WaitTrail` state instead.
 
 5. WaitTrail state: Similar to the WaitLead, this state serves to control the timing of the `csb` line.
 The FSM uses the `wait_cntr` register to ensure that it remains in this state for `csntrail+1` timeslices, during which time the active `csb` is still held low.
@@ -1042,14 +1049,33 @@ When working from a CPHA=0 configuration, the milestone signals are directly con
 When working from a CPHA=1 configuration, the milestone signals exploit the fact that there is usually a unique correspondence between `csb`/`sck` events and FSM transitions.
 There are some exceptions to this pattern since, as discussed below, CSAAT- and multi-csb-support requires the creation of multiple flavors of idle states.
 However, there are no milestone signal pulses in any of the transitions between these various idle states.
-Thus in CPHA=1 mode, the milestone signals are delayed by one-state transition.
+Thus in CPHA=1 mode, in a segment that enters `WaitLead` from `Idle`, `WaitIdle` or `ConfigSwitch`, each milestone falls one state transition later than in CPHA=0 mode.
+A segment that continues a held transaction, from `IdleCSBActive` or directly from the last clock state of the previous segment, starts its first byte on the first state transition in both modes.
 For example, in a CPHA=0 configuration the first data burst should be transmitted as the `csb` line is asserted low, that is, when the FSM enters the WaitLead state.
 Thus a `byte_starting` pulse is generated at this transition.
 On the other hand, in CPHA=1 configuration the first data burst should be transmitted after the first edge of `sck`, which happens on the next state transition as illustrated in the following waveform.
 
-That said, there are two copies of each milestone signal:
-- the original FSM-driven copy, for use when operating with CPHA=0, and
-- a delayed copy, for use in CPHA=1 operation.
+That said, there are two copies of each milestone signal, both driven directly by transitions in the FSM state register, and the CPHA setting of the command selects one:
+- the CPHA=0 copy, as in the table above, and
+- the CPHA=1 copy, as in the following table.
+
+<table>
+<thead><tr>
+<th>Milestone Signal</th><th>FSM Triggers (CPHA=1)</th>
+</tr></thead>
+<tbody>
+<tr><td><tt>byte_starting</tt></td><td>Entering <tt>InternalClkHigh</tt> and <tt>bit_cntr == 0</tt></td></tr>
+<tr><td><tt>bit_shifting</tt></td><td>Entering <tt>InternalClkHigh</tt> and <tt>bit_cntr != 0</tt></td></tr>
+<tr><td><tt>byte_ending</tt></td><td>Exiting <tt>InternalClkLow</tt> and <tt>bit_cntr == 0</tt></td></tr>
+</tbody>
+</table>
+
+Only the segment read enable is a delayed copy: for CPHA=1 it follows the CPHA=0 read enable one state transition late.
+In the following waveform, the `state_q`, `state_d` and `csb` rows at the top show the CPHA=0 sequence.
+The CPHA=1 group has its own `state_q` row, in which the segment ends one state later, from the `InternalClkLow` state.
+For CPHA=1, `csb` therefore rises one state later than the waveform shows.
+The CPHA=0 `sd_o` row ends at 0 where `csb` rises, for simplicity: the shift register keeps its last bits, and the FSM disables the data output (`sd_en_o`) once every `csb` line is high.
+The CPHA=1 `sd_o` row still drives its last bits at the right edge, because the CPHA=1 `csb` rises after the end of the waveform.
 
 {{< wavejson >}}
 {signal: [
@@ -1096,6 +1122,8 @@ That said, there are two copies of each milestone signal:
    data: "A[7:6] A[6:5] A[4:3] A[1:0] B[7:6] B[6:5] B[4:3] B[1:0]"}
   ],
   ["CPHA=1",
+   {name: 'state_q',
+    wave: 'x2.2.42424242424242422.', data: "Idle WL Hi Lo Hi Lo Hi Lo Hi Lo Hi Lo Hi Lo Hi Lo Hi Lo WT"},
    {name: 'byte_starting',
     wave: 'x0..10......10.........'},
    {name: 'bit_shifting',
@@ -1108,7 +1136,7 @@ That said, there are two copies of each milestone signal:
    wave: 'x2.2.........2.........',
    data: "0 1 0"},
   {name:'sd_o',
-   wave:'x0...2.2.2.2.2.2.2.2..0',
+   wave:'x0...2.2.2.2.2.2.2.2...',
    node:'',
    data: "A[7:6] A[6:5] A[4:3] A[1:0] B[7:6] B[6:5] B[4:3] B[1:0]"}
   ],
@@ -1178,16 +1206,21 @@ The following waveform illustrates how a change in a single {{< regref "CONFIGOP
 
 In addition to omitting the `ConfigSwitch` state, the simplified state machine illustrated above does not take into account commands with multiple segments, where the CSAAT bit is enabled for all but the last segment.
 
-When the CSAAT bit in enabled there is no idle period between the current segment and the next, nor are the two adjoining segments separated by a Trail or Lead period.
-Usually the end of each segment is detected in the `InternalClkHigh` state, at which point, if CSAAT is disabled, the FSM transitions to the `WaitTrail` state to close out the transaction.
-However, if CSAAT is enabled the `WaitTrail` state is skipped, and the next state depends on whether there is another command segment available for processing (i.e., both `command_ready_o` and `command_valid_i` are both asserted).
+When the CSAAT bit is enabled and the next segment is for the same `csb` line with the same configuration, there is no idle period between the two segments, nor are they separated by a Trail or Lead period.
+The end of each segment is detected in the `InternalClkHigh` state for CPHA=0, and in the `InternalClkLow` state for CPHA=1, at which point, if CSAAT is disabled, the FSM transitions to the `WaitTrail` state to close out the transaction.
+However, if CSAAT is enabled, the next state depends on the next command segment.
+A pending segment for the same `csb` line with the same configuration continues the transaction, as described below.
+A pending segment for another `csb` line, or with another configuration, is not accepted, and the FSM closes out the transaction through `WaitTrail`.
+With no segment pending, the FSM waits in `IdleCSBActive`.
 
-In order to support seamless, back-to-back segments the `ConfigSwitch` state can be skipped if a new segment is already available when the previous ends, in which case the FSM transitions directly to the `InternalClkLow` at the end of the previous segment.
+In order to support seamless, back-to-back segments the `ConfigSwitch` state can be skipped if a new segment for the same `csb` line and with the same configuration is already available when the previous ends, in which case the FSM transitions directly to the next clock state at the end of the previous segment: `InternalClkLow` for CPHA=0, and `InternalClkHigh` for CPHA=1.
 
 If there is no segment available yet, the FSM must pause and idly wait for the next command in the special `IdleCSBActive` state.
 This state serves a similar purpose to the `Idle` state since in this state the IP is doing nothing but waiting for new commands.
 It is different from the `Idle` state though in that during this state the active `csb` is held low.
-When a command segment is received in the `IdleCSBActive` state, it transitions immediately to the `InternalClkLow` state to generate the next `sck` pulse and process the next segment.
+When a command segment for the same `csb` line and with the same configuration is received in the `IdleCSBActive` state, it transitions immediately to the next clock state (`InternalClkLow` for CPHA=0, `InternalClkHigh` for CPHA=1) to generate the next `sck` pulse and process the next segment.
+A command segment for another `csb` line, or with another configuration, instead closes out the transaction through the `WaitTrail` and `WaitIdle` states, as the section [Chip-select Timing Control](#chip-select-timing-control) describes for configuration changes after CSAAT segments.
+The following waveform shows the CPHA=0 case.
 
 {{< wavejson >}}
 {signal: [
@@ -1204,9 +1237,13 @@ When a command segment is received in the `IdleCSBActive` state, it transitions 
 }
 {{< /wavejson >}}
 
-The following figure shows the complete state transition diagram of for the SPI_HOST FSM.
+The following figure shows the complete state transition diagram of the SPI_HOST FSM for CPHA=0.
 
 ![](spi_host_fsm_complete.svg)
+
+For CPHA=1, a segment ends from the `InternalClkLow` state, and a held segment continues from `IdleCSBActive` in the `InternalClkHigh` state.
+On the edges out of `IdleCSBActive`, `new_command` stands for a valid pending command, and `switch_required` for a command to another `csb` line or with another configuration.
+The FSM accepts a command that requires such a switch only at the end of `WaitIdle`.
 
 ### Skipped idle states
 
