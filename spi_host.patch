@@ -286,7 +286,7 @@ index 0f1e36ee5f..ae8866b66f 100644
  
    assign tx_empty_o = (tx_qd_o == 0);
 diff --git a/hw/ip/spi_host/rtl/spi_host_fsm.sv b/hw/ip/spi_host/rtl/spi_host_fsm.sv
-index 7ab1754732..a096926065 100644
+index 7ab1754732..721e674cb4 100644
 --- a/hw/ip/spi_host/rtl/spi_host_fsm.sv
 +++ b/hw/ip/spi_host/rtl/spi_host_fsm.sv
 @@ -5,6 +5,8 @@
@@ -375,7 +375,18 @@ index 7ab1754732..a096926065 100644
  
    spi_host_st_e next_state_after_idle;
    always_comb begin
-@@ -223,7 +222,11 @@ module spi_host_fsm
+@@ -212,7 +211,9 @@ module spi_host_fsm
+   logic         command_ready_idle_csb_active;
+   always_comb begin
+     if (command_valid_i) begin
+-      if (command_i.csid != csid_q) begin
++      // A command for another chip select, or with another configuration, ends the held
++      // transaction. A configuration change then reaches the chip select through CSBSwitch.
++      if ((command_i.csid != csid_q) || config_changed) begin
+         //
+         // Do not acknowledge the command now, as it will trigger
+         // an update of the internal command and configuration registers.
+@@ -223,7 +224,11 @@ module spi_host_fsm
          // Explicitly *suppress* command_ready
          command_ready_idle_csb_active = 1'b0;
        end else begin
@@ -388,7 +399,7 @@ index 7ab1754732..a096926065 100644
          command_ready_idle_csb_active = 1'b1;
        end
      end else begin
-@@ -254,14 +257,26 @@ module spi_host_fsm
+@@ -254,14 +259,26 @@ module spi_host_fsm
            end
          end
          InternalClkLow: begin
@@ -417,7 +428,7 @@ index 7ab1754732..a096926065 100644
              state_d = InternalClkLow;
            // Check value of csaat for the previously submitted segment
            end else if (!csaat_q) begin
-@@ -334,38 +349,31 @@ module spi_host_fsm
+@@ -334,38 +351,31 @@ module spi_host_fsm
    assign byte_ending_cpha0   = ~sw_rst_i & state_changing &
                                 (state_q == InternalClkHigh & bit_cntr_q == 0);
  
@@ -467,7 +478,7 @@ index 7ab1754732..a096926065 100644
  
    assign byte_starting = (cpha == 1'b0) ? byte_starting_cpha0 :
                                            byte_starting_cpha1;
-@@ -376,8 +384,7 @@ module spi_host_fsm
+@@ -376,8 +386,7 @@ module spi_host_fsm
    assign bit_shifting  = (cpha == 1'b0) ? bit_shifting_cpha0 :
                                            bit_shifting_cpha1;
  
@@ -477,7 +488,7 @@ index 7ab1754732..a096926065 100644
  
    assign segment_rd_en = (cpha == 1'b0) ? segment_rd_en_cpha0:
                                            segment_rd_en_cpha1;
-@@ -435,22 +442,25 @@ module spi_host_fsm
+@@ -435,22 +444,25 @@ module spi_host_fsm
    // can drive the FSM properly.  However, we explicitly choose
    // byte_cntr_cpha0_q to avoid a combinational logic loop.
    //
@@ -510,7 +521,7 @@ index 7ab1754732..a096926065 100644
                               byte_ending_cpha1 ? byte_cntr_cpha1_q - 1 :
                               byte_cntr_cpha1_q;
  
-@@ -489,8 +499,8 @@ module spi_host_fsm
+@@ -489,8 +501,8 @@ module spi_host_fsm
    always_ff @(posedge clk_i or negedge rst_ni) begin
      if (!rst_ni) begin
        bit_cntr_q        <= 3'h0;
@@ -521,7 +532,7 @@ index 7ab1754732..a096926065 100644
        wait_cntr_q       <= 4'h0;
      end else begin
        bit_cntr_q        <= stall ? bit_cntr_q        : bit_cntr_d;
-@@ -587,10 +597,8 @@ module spi_host_fsm
+@@ -587,10 +599,8 @@ module spi_host_fsm
    // Assertions confirming valid user input.
    //
  

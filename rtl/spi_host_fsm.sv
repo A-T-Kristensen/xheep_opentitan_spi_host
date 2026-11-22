@@ -211,7 +211,9 @@ module spi_host_fsm
   logic         command_ready_idle_csb_active;
   always_comb begin
     if (command_valid_i) begin
-      if (command_i.csid != csid_q) begin
+      // A command for another chip select, or with another configuration, ends the held
+      // transaction. A configuration change then reaches the chip select through CSBSwitch.
+      if ((command_i.csid != csid_q) || config_changed) begin
         //
         // Do not acknowledge the command now, as it will trigger
         // an update of the internal command and configuration registers.
