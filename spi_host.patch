@@ -311,7 +311,7 @@ index 211dfa4d9f..8da2461404 100644
                     increase !!CONTROL.RX_WATERMARK.''',
            resval: "0x0"
 diff --git a/hw/ip/spi_host/doc/_index.md b/hw/ip/spi_host/doc/_index.md
-index 081ea8d309..69949c5724 100644
+index 081ea8d309..591aad39e8 100644
 --- a/hw/ip/spi_host/doc/_index.md
 +++ b/hw/ip/spi_host/doc/_index.md
 @@ -21,7 +21,7 @@ See that document for integration overview within the broader top-level system.
@@ -1005,10 +1005,10 @@ index 081ea8d309..69949c5724 100644
  }
  {{< /wavejson >}}
  
-+The waveform uses `csnlead` = 1, so the FSM stays in `WaitLead` for two timeslices.
-+The `sample_en_o` pulse that follows `byte_starting` samples `sd` one timeslice after `csb` falls.
-+The pulse from the last `WaitLead` timeslice samples `sd` again at the first rising edge of `sck`, and this second sample replaces the first before the first shift.
-+With `csnlead` = 0, the two pulses are one pulse.
++The waveform uses `csnlead` = 1, so the FSM stays in `WaitLead` for two timeslices, and `sample_en_o` is high in both.
++The enable in the first `WaitLead` timeslice comes from `byte_starting`, and samples `sd` one timeslice after `csb` falls.
++The enable in the last `WaitLead` timeslice samples `sd` again at the first rising edge of `sck`, and this second sample replaces the first before the first shift.
++With `csnlead` = 0, `WaitLead` lasts one timeslice, and the two enables are the same one.
 +
  When working from a CPHA=0 configuration, the milestone signals are directly controlled by transitions in the FSM state register, as described in the following table.
  

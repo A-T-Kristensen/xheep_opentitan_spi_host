@@ -1041,10 +1041,10 @@ foot: {text: "Key: WL=\"WaitLead\", Hi=\"InternalClkHigh\", Lo=\"InternalClkLow\
 }
 {{< /wavejson >}}
 
-The waveform uses `csnlead` = 1, so the FSM stays in `WaitLead` for two timeslices.
-The `sample_en_o` pulse that follows `byte_starting` samples `sd` one timeslice after `csb` falls.
-The pulse from the last `WaitLead` timeslice samples `sd` again at the first rising edge of `sck`, and this second sample replaces the first before the first shift.
-With `csnlead` = 0, the two pulses are one pulse.
+The waveform uses `csnlead` = 1, so the FSM stays in `WaitLead` for two timeslices, and `sample_en_o` is high in both.
+The enable in the first `WaitLead` timeslice comes from `byte_starting`, and samples `sd` one timeslice after `csb` falls.
+The enable in the last `WaitLead` timeslice samples `sd` again at the first rising edge of `sck`, and this second sample replaces the first before the first shift.
+With `csnlead` = 0, `WaitLead` lasts one timeslice, and the two enables are the same one.
 
 When working from a CPHA=0 configuration, the milestone signals are directly controlled by transitions in the FSM state register, as described in the following table.
 
